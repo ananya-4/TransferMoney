@@ -19,38 +19,63 @@ app.use(bodyParser.json());
 
 // ... other middleware
 
-const personalInfoSchema = new mongoose.Schema({
+const personalInfo = new mongoose.Schema({
   Name: String,
   Email: String,
   CurrentBalance: Number,
   NoOfPayments: Number
 });
 
-const transactionSchema = new mongoose.Schema({
+const transactions = new mongoose.Schema({
   idFrom: String,
   idTo: String,
   amount: Number
 });
 
-const PersonalInfo = mongoose.model('PersonalInfo', personalInfoSchema);
-const Transaction = mongoose.model('Transaction', transactionSchema);
+const PersonalInfo = mongoose.model('PersonalInfo', personalInfo);
+const Transaction = mongoose.model('Transaction', transactions);
 
-app.get('/api/data', async (req, res) => {
+
+app.get("/api/data", async (req, res) => {
   try {
     const data = await PersonalInfo.find();
-    res.json(data);
-  } catch (err) {
-    console.error('Error fetching data:', err);
-    res.status(500).json({ error: 'Failed to fetch data' });
+    
+
+    const formattedData = data.map((item) => ({
+      _id: item._id.toString(),
+      Name: item.Name,
+      Email: item.Email,
+      CurrentBalance: item.CurrentBalance,
+      NoOfPayments: item.NoOfPayments,
+    }));
+    res.json(formattedData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Error fetching data' });
   }
 });
 
-app.post('/submit', async (req, res) => {
+app.post('/submitTransaction', async (req, res) => {
   const { idFrom, idTo, amount } = req.body;
 
   try {
     const transaction = new Transaction({ idFrom, idTo, amount });
     await transaction.save();
+
+    // Update the CurrentBalance and NoOfPayments of the sender
+    await PersonalInfo.findByIdAndUpdate(
+      idFrom,
+      { $inc: { CurrentBalance: -amount, NoOfPayments: 1 } },
+      { new: true }
+    );
+
+    // Update the CurrentBalance of the receiver
+    await PersonalInfo.findByIdAndUpdate(
+      idTo,
+      { $inc: { CurrentBalance: amount } },
+      { new: true }
+    );
+
     res.status(201).json({ message: 'Transaction created' });
   } catch (err) {
     console.error('Error creating transaction:', err);
@@ -58,25 +83,39 @@ app.post('/submit', async (req, res) => {
   }
 });
 
-app.patch('/updatePersonalInfo/:id', async (req, res) => {
+app.patch('/updateTransaction/:id', async (req, res) => {
   const { id } = req.params;
-  const { amount } = req.body;
+  const { idFrom, idTo, amount } = req.body;
 
   try {
-    const updatedUser = await PersonalInfo.findByIdAndUpdate(
+    const updatedTransaction = await Transaction.findByIdAndUpdate(
       id,
+      { idFrom, idTo, amount },
+      { new: true }
+    );
+
+    if (!updatedTransaction) {
+      return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    // Update the CurrentBalance and NoOfPayments of the sender
+    await PersonalInfo.findByIdAndUpdate(
+      idFrom,
       { $inc: { CurrentBalance: -amount, NoOfPayments: 1 } },
       { new: true }
     );
 
-    if (!updatedUser) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    // Update the CurrentBalance of the receiver
+    await PersonalInfo.findByIdAndUpdate(
+      idTo,
+      { $inc: { CurrentBalance: amount } },
+      { new: true }
+    );
 
-    res.json(updatedUser);
+    res.json(updatedTransaction);
   } catch (err) {
-    console.error('Error updating user:', err);
-    res.status(500).json({ error: 'Failed to update user' });
+    console.error('Error updating transaction:', err);
+    res.status(500).json({ error: 'Failed to update transaction' });
   }
 });
 
