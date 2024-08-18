@@ -1,126 +1,96 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const bodyParser = require('body-parser');
-const cors = require('cors');
+const express = require("express");
+const { MongoClient, ObjectId } = require("mongodb");
+const path = require("path");
 
 const app = express();
 const port = 3000;
 
-const uri = 'mongodb://localhost:27017/transferMoney';
+const uri = "mongodb://localhost:27017/transferMoney";
+const client = new MongoClient(uri);
 
-mongoose.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
-const db = mongoose.connection;
-
-app.use(cors());
-app.use(bodyParser.json());
-
-// ... other middleware
-
-const personalInfo = new mongoose.Schema({
-  Name: String,
-  Email: String,
-  CurrentBalance: Number,
-  NoOfPayments: Number
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept"
+  );
+  next();
 });
 
-const transactions = new mongoose.Schema({
-  idFrom: String,
-  idTo: String,
-  amount: Number
-});
-
-const PersonalInfo = mongoose.model('PersonalInfo', personalInfo);
-const Transaction = mongoose.model('Transaction', transactions);
-
-
-app.get("/api/data", async (req, res) => {
+async function run() {
   try {
-    const data = await PersonalInfo.find();
-    
+    await client.connect();
+    const database = client.db("transferMoney");
+    const collectionPer = database.collection("personalInfo");
+    const collection = database.collection("transactions");
 
-    const formattedData = data.map((item) => ({
-      _id: item._id.toString(),
-      Name: item.Name,
-      Email: item.Email,
-      CurrentBalance: item.CurrentBalance,
-      NoOfPayments: item.NoOfPayments,
-    }));
-    res.json(formattedData);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error fetching data' });
-  }
-});
+    app.get("/api/data", async (req, res) => {
+      const data = await collectionPer.find().toArray();
 
-app.post('/submitTransaction', async (req, res) => {
-  const { idFrom, idTo, amount } = req.body;
+      const formattedData = data.map((item) => ({
+        _id: item._id.toString(),
+        Name: item.Name,
+        Email: item.Email,
+      }));
+      res.json(formattedData);
+    });
 
-  try {
-    const transaction = new Transaction({ idFrom, idTo, amount });
-    await transaction.save();
+    app.post("/submit", async (req, res) => {
+      const { idFrom, idTo, amount } = req.body;
+      console.log(`Received form data: ${idFrom}, ${idTo}, ${amount}`);
 
-    // Update the CurrentBalance and NoOfPayments of the sender
-    await PersonalInfo.findByIdAndUpdate(
-      idFrom,
-      { $inc: { CurrentBalance: -amount, NoOfPayments: 1 } },
-      { new: true }
-    );
+      const transaction_1 = {
+        idFrom: idFrom,
+        idTo: idTo,
+        amount: parseInt(amount), // Ensure amount is stored as a number
+      };
 
-    // Update the CurrentBalance of the receiver
-    await PersonalInfo.findByIdAndUpdate(
-      idTo,
-      { $inc: { CurrentBalance: amount } },
-      { new: true }
-    );
+      try {
+        // Update the sender's document
 
-    res.status(201).json({ message: 'Transaction created' });
+        const senderUpdate = await collectionPer.updateOne(
+          { _id: new ObjectId(idFrom) },
+          {
+            $inc: {
+              CurrentBalance: -parseInt(amount),
+              NoOfPayments: 1,
+            },
+          }
+        );
+
+        // Update the receiver's document
+        const receiverUpdate = await collectionPer.updateOne(
+          { _id: new ObjectId(idTo) },
+          {
+            $inc: {
+              CurrentBalance: parseInt(amount),
+            },
+          }
+        );
+
+        // Insert the transaction document
+        const result = await collection.insertOne(transaction_1);
+        console.log("Transaction inserted:", result.insertedId);
+        res.send("Transaction successfully recorded");
+      } catch (err) {
+        console.error(
+          "Error updating documents or inserting transaction:",
+          err
+        );
+        res.status(500).send("Error recording transaction");
+      }
+    });
   } catch (err) {
-    console.error('Error creating transaction:', err);
-    res.status(500).json({ error: 'Failed to create transaction' });
+    console.error(err);
   }
-});
+}
 
-app.patch('/updateTransaction/:id', async (req, res) => {
-  const { id } = req.params;
-  const { idFrom, idTo, amount } = req.body;
+run().catch(console.error);
 
-  try {
-    const updatedTransaction = await Transaction.findByIdAndUpdate(
-      id,
-      { idFrom, idTo, amount },
-      { new: true }
-    );
-
-    if (!updatedTransaction) {
-      return res.status(404).json({ error: 'Transaction not found' });
-    }
-
-    // Update the CurrentBalance and NoOfPayments of the sender
-    await PersonalInfo.findByIdAndUpdate(
-      idFrom,
-      { $inc: { CurrentBalance: -amount, NoOfPayments: 1 } },
-      { new: true }
-    );
-
-    // Update the CurrentBalance of the receiver
-    await PersonalInfo.findByIdAndUpdate(
-      idTo,
-      { $inc: { CurrentBalance: amount } },
-      { new: true }
-    );
-
-    res.json(updatedTransaction);
-  } catch (err) {
-    console.error('Error updating transaction:', err);
-    res.status(500).json({ error: 'Failed to update transaction' });
-  }
-});
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
-
-
